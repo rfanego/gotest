@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -13,12 +15,33 @@ type weatherData struct {
 	} `json:"main"`
 }
 
+type apixuData struct {
+	Location struct {
+		Name string `json:"name"`
+	} `json:"location"`
+	Current struct {
+		Celsius float64 `json:"temp_c"`
+	} `json:"current"`
+}
+
+type weatherProvider interface {
+	temperature(city string) (float64, error)
+}
+
+type openWeatherMap struct{}
+
+type apixu struct{}
+
+//http://api.apixu.com/v1/current.json?key=a56cd6be31f140c989f234721182705&q=Buenos%20Aires
+
 func main() {
 	http.HandleFunc("/", hello)
 	http.HandleFunc("/weather/", func(w http.ResponseWriter, r *http.Request) {
 		city := strings.SplitN(r.URL.Path, "/", 3)[2]
 
-		data, err := query(city)
+		var a apixu
+
+		data, err := a.temperature(city)
 
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -31,11 +54,11 @@ func main() {
 	http.ListenAndServe(":8080", nil)
 }
 
-func query(city string) (weatherData, error) {
+func (w openWeatherMap) temperature(city string) (float64, error) {
 	resp, err := http.Get("http://api.openweathermap.org/data/2.5/weather?APPID=d48cc5e1eaf189bb333fe1cdd892140d&q=" + city)
 
 	if err != nil {
-		return weatherData{}, err
+		return 0, err
 	}
 
 	defer resp.Body.Close()
@@ -43,10 +66,47 @@ func query(city string) (weatherData, error) {
 	var d weatherData
 
 	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
-		return weatherData{}, err
+		return 0, err
 	}
 
-	return d, nil
+	log.Printf("openWeatherMap: %s: %.2f", city, d.Main.Kelvin)
+	return d.Main.Kelvin, nil
+}
+
+func (w apixu) temperature(city string) (float64, error) {
+	var Url *url.URL
+	Url, err := url.Parse("http://api.apixu.com")
+	Url.Path += "/v1/current.json"
+
+	parameters := url.Values{}
+	parameters.Add("key", "a56cd6be31f140c989f234721182705")
+	parameters.Add("q", city)
+	Url.RawQuery = parameters.Encode()
+
+	log.Printf("url: %s", Url.String())
+
+	if err != nil {
+		return 0, err
+	}
+
+	resp, err := http.Get(Url.String())
+
+	if err != nil {
+		return 0, err
+	}
+
+	defer resp.Body.Close()
+
+	var d apixuData
+
+	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+		return 0, err
+	}
+
+	kelvin := d.Current.Celsius + 273.15
+
+	log.Printf("apixu: %s: %.2f", city, kelvin)
+	return kelvin, nil
 }
 
 func hello(w http.ResponseWriter, r *http.Request) {
