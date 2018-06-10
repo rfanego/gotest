@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 type weatherData struct {
@@ -32,16 +33,22 @@ type openWeatherMap struct{}
 
 type apixu struct{}
 
+type multiWeatherProvider []weatherProvider
+
 //http://api.apixu.com/v1/current.json?key=a56cd6be31f140c989f234721182705&q=Buenos%20Aires
 
 func main() {
+	mw := multiWeatherProvider{
+		openWeatherMap{},
+		apixu{},
+	}
+
 	http.HandleFunc("/", hello)
 	http.HandleFunc("/weather/", func(w http.ResponseWriter, r *http.Request) {
+		begin := time.Now()
 		city := strings.SplitN(r.URL.Path, "/", 3)[2]
 
-		var a apixu
-
-		data, err := a.temperature(city)
+		temp, err := mw.temperature(city)
 
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -49,9 +56,28 @@ func main() {
 		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		json.NewEncoder(w).Encode(data)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"city": city,
+			"temp": temp,
+			"took": time.Since(begin).String(),
+		})
 	})
 	http.ListenAndServe(":8080", nil)
+}
+
+func (w multiWeatherProvider) temperature(city string) (float64, error) {
+	sum := 0.0
+
+	for _, provider := range w {
+		temp, err := provider.temperature(city)
+		if err != nil {
+			return 0, nil
+		}
+
+		sum += temp
+	}
+
+	return sum / float64(len(w)), nil
 }
 
 func (w openWeatherMap) temperature(city string) (float64, error) {
